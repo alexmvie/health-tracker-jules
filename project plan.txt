@@ -1,0 +1,12 @@
+Develop a health data tracking app in German for managing multiple profiles, tracking blood pressure (systolic, diastolic, pulse), SpO2, weight, and medications. Include a modern, colorful iOS-inspired design with subtle animations and these screens:  
+- Login/Registration: User authentication and account creation.  
+- Profile Management: Manage profiles with customizable settings (e.g., measurements per entry, default: 2).  
+- Home Dashboard: Show selected profile, today's data summary, and profile-switching options.  
+- Data Entry: Input data with iOS-like wheels for blood pressure/pulse, optional SpO2/weight fields, and a medication field with a copy-from-yesterday button.  
+- History View: Display past data with filters and visualizations.  
+- Settings: App-wide options, including backup/restore.  
+Store data locally at first, with later MongoDB synchronization. Ensure the app is intuitive, accessible, and scalable.
+- tech stack: 
+  - Frontend: React Native Expo, Realm (for local on-device persistence)
+  - Backend: Node.js (hosted on Render.com), connected to MongoDB Atlas for cloud storage and synchronization.
+  - Synchronization: Custom API-based sync between Expo app and Node.js backend.
