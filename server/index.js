@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const { connectToMongoDB } = require('./lib/mongoClient'); // Import the function
 
@@ -75,10 +76,13 @@ async function startServer() {
   });
 }
 
-// Call the function to start the server
-startServer().catch(error => {
-  // This catch is for errors in the startServer function itself, not typically for MongoDB connection errors
-  // as connectToMongoDB is designed to handle its own errors and return null.
-  console.error("Critical error during server startup process (e.g., Express app.listen failure):", error);
-  // process.exit(1); // Optional: exit if server startup itself (not DB connection) critically fails
-});
+// Export the Express app for testing
+module.exports = app;
+
+// Only start the server if this file is run directly (not when imported for tests)
+if (require.main === module) {
+  startServer().catch(error => {
+    console.error("Critical error during server startup process (e.g., Express app.listen failure):", error);
+    process.exit(1);
+  });
+}

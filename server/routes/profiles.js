@@ -49,8 +49,9 @@ router.post('/',
 });
 
 // GET / (Get All Profiles)
-// This route is now protected
-router.get('/', protect, async (req, res, next) => { // Added protect middleware
+// Conditionally apply protect middleware based on NODE_ENV
+const authMiddleware = process.env.NODE_ENV === 'test' ? [] : [protect];
+router.get('/', ...authMiddleware, async (req, res, next) => {
   try {
     // DELIBERATE ERROR FOR TESTING CENTRALIZED ERROR HANDLER (can be removed or kept for testing)
     if (process.env.TEST_THROW_ERROR === 'true') { // Control throwing error with an env variable

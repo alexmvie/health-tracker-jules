@@ -1,89 +1,138 @@
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient } = require('mongodb');
 
-// Use a placeholder connection string
-// In a real app, this would ideally be from process.env.MONGODB_URI
-const MONGODB_URI = 'mongodb://placeholder-uri-for-testing:27017/healthtracker_db_placeholder'; 
+// Connection URI - will be set from environment variables
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/healthtracker_test';
 
-let clientInstance = null; // To store the connected client instance
+let clientInstance = null;
+let isConnecting = false;
+let connectionPromise = null;
 
 /**
- * Connects to MongoDB.
- * @returns {Promise<MongoClient|null>} The connected MongoClient instance or null on failure.
+ * Connects to MongoDB with retry logic
+ * @returns {Promise<MongoClient>} The connected MongoClient instance
+ * @throws {Error} If connection fails after retries
  */
 async function connectToMongoDB() {
+  // If already connected, return the existing connection
   if (clientInstance) {
-    // Basic check if already initialized and possibly connected.
-    // A more robust check like a ping might be too much for this simple setup.
-    // console.log('MongoDB client already initialized. Assuming connected or attempting connection.');
-    // return clientInstance; 
-    // Forcing re-evaluation for this example to ensure connection logic is hit:
     try {
-        // A quick ping to check actual connectivity of an existing client
-        await clientInstance.db("admin").command({ ping: 1 });
-        console.log('Already connected to MongoDB (ping successful).');
-        return clientInstance;
-    } catch (e) {
-        console.log('Previously initialized client found, but ping failed or client not truly connected. Attempting to reconnect.');
-        clientInstance = null; // Reset to force re-connection
+      // Verify the connection is still alive
+      await clientInstance.db('admin').command({ ping: 1 });
+      return clientInstance;
+    } catch (error) {
+      console.warn('Existing MongoDB connection failed ping, reconnecting...');
+      clientInstance = null;
     }
   }
 
-  const client = new MongoClient(MONGODB_URI, {
-    // Example of ServerApiVersion setting, typically for Atlas.
-    // serverApi: {
-    //   version: ServerApiVersion.v1,
-    //   strict: true,
-    //   deprecationErrors: true,
-    // }
-  });
+  // If already in the process of connecting, return the existing promise
+  if (isConnecting && connectionPromise) {
+    return connectionPromise;
+  }
+
+  isConnecting = true;
+  
+  const connectWithRetry = async (attempt = 1, maxAttempts = 3, delayMs = 1000) => {
+    const client = new MongoClient(MONGODB_URI, {
+      connectTimeoutMS: 5000,
+      socketTimeoutMS: 30000,
+      serverSelectionTimeoutMS: 5000,
+      maxPoolSize: 10,
+      retryWrites: true,
+      w: 'majority'
+    });
+
+    try {
+      console.log(`Attempting to connect to MongoDB (attempt ${attempt}/${maxAttempts})...`);
+      await client.connect();
+      console.log('Successfully connected to MongoDB');
+      return client;
+    } catch (error) {
+      await client.close();
+      
+      if (attempt >= maxAttempts) {
+        console.error(`Failed to connect to MongoDB after ${maxAttempts} attempts:`, error.message);
+        throw new Error(`Failed to connect to MongoDB: ${error.message}`);
+      }
+      
+      console.log(`Retrying connection in ${delayMs}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+      return connectWithRetry(attempt + 1, maxAttempts, delayMs * 2);
+    }
+  };
 
   try {
-    console.log(`Attempting to connect to MongoDB at ${MONGODB_URI}...`);
-    // Note: client.connect() itself doesn't return the client, it modifies the client instance.
-    await client.connect(); 
-    console.log('MongoDB client.connect() call successful (this does not guarantee server is reachable with placeholder).');
-    clientInstance = client; // Store the connected instance
+    connectionPromise = connectWithRetry();
+    clientInstance = await connectionPromise;
     return clientInstance;
-  } catch (error) {
-    // This error will likely occur due to the placeholder URI (e.g., DNS resolution failure, server not found).
-    console.error('Failed to connect to MongoDB:', error.message); 
-    // For more detailed error in a real scenario: console.error(error); 
-    clientInstance = null; // Ensure clientInstance is null on failure
-    return null;
+  } finally {
+    isConnecting = false;
+    connectionPromise = null;
   }
 }
 
 /**
- * Gets the database instance from the currently connected client.
- * @param {string} dbName - The name of the database (e.g., "healthtracker").
- * @returns {import('mongodb').Db | null} The Db instance or null if not connected.
+ * Gets the database instance from the currently connected client
+ * @param {string} dbName - The name of the database (default: 'healthtracker')
+ * @returns {import('mongodb').Db} The Db instance
+ * @throws {Error} If not connected to MongoDB
  */
 function getDb(dbName = 'healthtracker') {
   if (!clientInstance) {
-    console.error('MongoDB client not connected or connection failed. Call connectToMongoDB and ensure it succeeds.');
-    return null;
+    throw new Error('MongoDB client not connected. Call connectToMongoDB() first.');
   }
-  // Check if the client topology is connected (more reliable check after client.connect())
-  // This check might be too intensive or internal for some driver versions / use cases.
-  // A simple check for clientInstance existence is often used, relying on connectToMongoDB's success.
-  if (clientInstance.topology && !clientInstance.topology.isConnected()) {
-      console.error('MongoDB client is initialized but not connected to the server.');
-      return null;
+  
+  try {
+    return clientInstance.db(dbName);
+  } catch (error) {
+    console.error('Error getting database instance:', error.message);
+    throw new Error(`Failed to get database instance: ${error.message}`);
   }
-  return clientInstance.db(dbName);
 }
 
-// Function to close the MongoDB connection, useful for graceful shutdown
+/**
+ * Closes the MongoDB connection
+ * @returns {Promise<void>}
+ */
 async function closeMongoDBConnection() {
-    if (clientInstance) {
-        try {
-            await clientInstance.close();
-            console.log("MongoDB connection closed.");
-            clientInstance = null;
-        } catch (error) {
-            console.error("Error closing MongoDB connection:", error.message);
-        }
-    }
+  if (!clientInstance) {
+    return;
+  }
+
+  try {
+    await clientInstance.close(true); // Force close all connections
+    console.log('MongoDB connection closed');
+  } catch (error) {
+    console.error('Error closing MongoDB connection:', error.message);
+    throw error;
+  } finally {
+    clientInstance = null;
+  }
 }
 
-module.exports = { connectToMongoDB, getDb, closeMongoDBConnection, MONGODB_URI };
+// Handle process termination
+process.on('SIGINT', async () => {
+  console.log('Received SIGINT. Closing MongoDB connection...');
+  await closeMongoDBConnection().catch(console.error);
+  process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  console.log('Received SIGTERM. Closing MongoDB connection...');
+  await closeMongoDBConnection().catch(console.error);
+  process.exit(0);
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  closeMongoDBConnection().catch(console.error);
+  process.exit(1);
+});
+
+module.exports = { 
+  connectToMongoDB, 
+  getDb, 
+  closeMongoDBConnection, 
+  MONGODB_URI 
+};
